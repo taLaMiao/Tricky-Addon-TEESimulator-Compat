@@ -1,0 +1,64 @@
+name: sync-upstream
+
+# Periodically merges changes from KOWX712/Tricky-Addon-Update-Target-List
+# main branch into our main, preserving our 5 patched files via git's three-way merge.
+# If conflicts occur, the workflow opens a PR for manual resolution instead of force-merging.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/KOWX712/Tricky-Addon-Update-Target-List.git
+          git fetch upstream main
+
+      - name: Try fast-forward / clean merge
+        id: merge
+        continue-on-error: true
+        run: |
+          git checkout main
+          if git merge upstream/main --no-edit; then
+            echo "result=clean" >> $GITHUB_OUTPUT
+          else
+            echo "result=conflict" >> $GITHUB_OUTPUT
+            git merge --abort || true
+          fi
+
+      - name: Push if clean merge
+        if: steps.merge.outputs.result == 'clean'
+        run: |
+          git push origin main
+
+      - name: Open PR if conflicts
+        if: steps.merge.outputs.result == 'conflict'
+        run: |
+          BRANCH="sync/upstream-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH" upstream/main
+          git push origin "$BRANCH"
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Sync from KOWX712 upstream (manual conflict resolution needed)" \
+            --body "Upstream had changes conflicting with our TEESimulator-compat patches. Resolve conflicts in the 5 patched files: customize.sh, post-fs-data.sh, service.sh, common/get_extra.sh, module.prop"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

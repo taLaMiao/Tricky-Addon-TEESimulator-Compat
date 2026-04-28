@@ -48,11 +48,27 @@ else
     abort " "
 fi
 
-[ -d "/data/adb/modules/tricky_store" ] || ui_print "! Warning: Tricky store module not found"
+if [ -d "/data/adb/modules/tricky_store" ]; then
+    ui_print "- Backend: Tricky Store detected"
+elif [ -d "/data/adb/modules/tee_simulator" ] || [ -d "/data/adb/modules/teesimulator" ]; then
+    ui_print "- Backend: TEESimulator detected (standalone mode)"
+else
+    ui_print "! Warning: Neither Tricky Store nor TEESimulator detected."
+    ui_print "!          Module will install but stay idle until a backend"
+    ui_print "!          (Tricky Store or TEESimulator) is installed."
+fi
 
 ui_print "- Installing..."
 # Magisk cleanup
 rm -rf "/data/adb/modules/$NEW_MODID"
+
+# TEESimulator-compat fork: ensure webroot/ exists in this module's dir so
+# KSU/APatch manager shows the "Open WebUI" button on this module's entry.
+# webroot/ is shipped as a copy of webui/ in the module zip; if missing for any
+# reason, fall back to a symlink.
+if [ ! -e "$MODPATH/webroot" ] && [ -d "$MODPATH/webui" ]; then
+    ln -sf webui "$MODPATH/webroot"
+fi
 
 if [ "$ACTION" = "false" ]; then
     rm -f "$MODPATH/action.sh"

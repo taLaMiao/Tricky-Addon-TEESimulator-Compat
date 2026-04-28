@@ -3,3 +3,5 @@ __MACOSX
 applist.json
 changelog_draft.md
 module/webui
+module/webroot
+webui/node_modules

@@ -7,7 +7,7 @@ on:
     paths:
       - 'module/**'
       - 'webui/**'
-      - '.github/workflows/**'
+      - '.github/workflows/build.yml'
   pull_request:
     paths:
       - 'module/**'
@@ -21,39 +21,24 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
-    outputs:
-      version_tag_exists: ${{ steps.check_tag.outputs.version_tag_exists }}
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Update translation template
-        run: |
-          # Translation template
-          cp -f webui/public/locales/strings/en.xml webui/public/locales/template.xml
-
-          # Commit if found changes
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-
-          # Force push translation template if changed
-          if git status --porcelain | grep 'webui/public/locales/template.xml'; then
-            git add webui/public/locales/template.xml
-            git commit --amend --no-edit
-          fi
-
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@v4
         with:
-          version: 'latest'
+          version: '10.28.2'
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: 'latest'
+          node-version: '22'
           cache: 'pnpm'
           cache-dependency-path: webui/pnpm-lock.yaml
 
@@ -63,123 +48,44 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: Extract Module Info
-        id: extract_info
+      - name: Extract module info
+        id: info
         run: |
           MODULE_VERSION=$(grep '^version=' module/module.prop | sed 's/version=//')
           COMMIT_NUM=$(git rev-list --count HEAD)
           BUILD_COUNT=${{ github.run_number }}
-          ARTIFACT_NAME="TrickyAddonModule-${MODULE_VERSION}-${COMMIT_NUM}-canary"
-          sed -i "s/^version=.*/& (${COMMIT_NUM}${BUILD_COUNT}-canary)/" module/module.prop
+          ARTIFACT_NAME="TrickyAddon-TEESimulator-Compat-${MODULE_VERSION}-${COMMIT_NUM}"
+          sed -i "s/^version=.*/& (${COMMIT_NUM}${BUILD_COUNT})/" module/module.prop
           sed -i "s/^versionCode=.*/versionCode=${COMMIT_NUM}/" module/module.prop
           echo "MODULE_VERSION=${MODULE_VERSION}" >> $GITHUB_ENV
           echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
-          echo "VERSION=${MODULE_VERSION}" >> $GITHUB_ENV
+          echo "COMMIT_NUM=${COMMIT_NUM}" >> $GITHUB_ENV
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v7
+      - name: Package module zip
+        run: |
+          cd module
+          zip -r9 "../${ARTIFACT_NAME}.zip" .
+          cd ..
+          ls -lh "${ARTIFACT_NAME}.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: module/
-          include-hidden-files: true
+          path: ${{ env.ARTIFACT_NAME }}.zip
 
-      - name: Check if valid to release
-        id: check_tag
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "version_tag_exists=true" >> $GITHUB_OUTPUT
-          else
-            git fetch --tags
-            VERSION=${{ env.VERSION }}
-            if git tag | grep -qx "^${VERSION}"; then
-              echo "version_tag_exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "version_tag_exists=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-  release:
-    name: release
-    runs-on: ubuntu-latest
-    needs: build
-    if: ${{ needs.build.outputs.version_tag_exists == 'false' && github.event_name != 'pull_request' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - name: Create rolling "latest" pre-release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
         with:
-          fetch-depth: 0
+          tag_name: latest
+          name: "Latest build (rolling)"
+          body: |
+            Auto-built from commit ${{ github.sha }}
+            Module version: ${{ env.MODULE_VERSION }}
+            Commit count: ${{ env.COMMIT_NUM }}
 
-      - name: Set release variables
-        id: set_release_variables
-        run: |
-          VERSION=$(grep '^version=' module/module.prop | sed 's/version=//')
-          RELEASE_NOTES=$(awk -v tag="### $VERSION" '
-            $0 == tag {flag=1; next}
-            /^###/ && flag {exit}
-            flag {print}
-          ' changelog.md)
-
-          if [[ "$VERSION" == *"beta"* ]]; then
-            PRERELEASE=true
-            FORMATTED_RELEASE_NOTES=""
-          else
-            PRERELEASE=false
-            FORMATTED_RELEASE_NOTES=$(echo -e "### Tricky Addon module\n$RELEASE_NOTES\n")
-          fi
-
-          echo "CURRENT_TAG=$VERSION" >> $GITHUB_ENV
-          echo "ZIP_NAME=TrickyAddonModule-${VERSION}.zip" >> $GITHUB_ENV
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "$FORMATTED_RELEASE_NOTES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          echo "PRERELEASE=$PRERELEASE" >> $GITHUB_ENV
-
-      - name: Update update.json
-        run: |
-          COMMIT_NUM=$(git rev-list --count HEAD)
-          [ "${{ env.PRERELEASE }}" = "false" ] && sed -i "s/\"versionCode\":.*/\"versionCode\": ${COMMIT_NUM},/" update.json
-          sed -i "s/^versionCode=.*/versionCode=${COMMIT_NUM}/" module/module.prop
-
-          git config --global user.email "leecc0503@gmail.com"
-          git config --global user.name "KOWX712"
-          git remote set-url origin "https://${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git"
-
-          if git status --porcelain | grep -E 'update.json|module/module.prop'; then
-            git add update.json module/module.prop
-            git commit --amend --no-edit
-            git push --force
-          fi
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-        with:
-          version: 'latest'
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 'latest'
-          cache: 'pnpm'
-          cache-dependency-path: webui/pnpm-lock.yaml
-
-      - name: Build WebUI
-        run: |
-          cd webui
-          pnpm install --frozen-lockfile
-          pnpm build
-
-      - name: Compress module folder
-        run: |
-          cd module && zip -r "../${{ env.ZIP_NAME }}" ./*
-
-      - name: Create release
-        uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          files: ${{ env.ZIP_NAME }}
-          tag_name: ${{ env.CURRENT_TAG }}
-          name: ${{ env.CURRENT_TAG }}
-          body: ${{ env.RELEASE_NOTES }}
-          draft: ${{ env.PRERELEASE }}
-          prerelease: ${{ env.PRERELEASE }}
+            Flash via KSU/APatch/Magisk manager.
+          prerelease: true
+          files: ${{ env.ARTIFACT_NAME }}.zip
+          fail_on_unmatched_files: true

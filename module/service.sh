@@ -2,6 +2,8 @@ MODPATH=${0%/*}
 PATH=$PATH:/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk
 HIDE_DIR="/data/adb/modules/.TA_utl"
 TS="/data/adb/modules/tricky_store"
+TEE="/data/adb/modules/tee_simulator"
+TEE_ALT="/data/adb/modules/teesimulator"
 TSPA="/data/adb/modules/tsupport-advance"
 
 add_denylist_to_target() {
@@ -54,12 +56,21 @@ else
     [ -d "$HIDE_DIR" ] && rm -rf "$HIDE_DIR"
 fi
 
-# Symlink tricky store
-if [ -f "$MODPATH/action.sh" ] && [ ! -e "$TS/action.sh" ]; then
-    ln -s "$MODPATH/action.sh" "$TS/action.sh"
-fi
-if [ ! -e "$TS/webroot" ]; then
-    ln -s "$MODPATH/webui" "$TS/webroot"
+# Symlink into Tricky Store dir only if TS exists (legacy compat).
+# When running with TEESimulator standalone, skip these symlinks: user opens
+# the WebUI directly from this module's own entry in KSU/APatch manager.
+if [ -d "$TS" ]; then
+    if [ -f "$MODPATH/action.sh" ] && [ ! -e "$TS/action.sh" ]; then
+        ln -s "$MODPATH/action.sh" "$TS/action.sh"
+    fi
+    if [ ! -e "$TS/webroot" ]; then
+        # Symlink webroot/ (preferred) or fall back to webui/ for legacy zip layouts.
+        if [ -d "$MODPATH/webroot" ]; then
+            ln -s "$MODPATH/webroot" "$TS/webroot"
+        elif [ -d "$MODPATH/webui" ]; then
+            ln -s "$MODPATH/webui" "$TS/webroot"
+        fi
+    fi
 fi
 
 until [ "$(getprop sys.boot_completed)" = "1" ]; do
@@ -71,4 +82,8 @@ sh "$MODPATH/common/get_extra.sh" --xposed >/dev/null 2>&1
 [ ! -f "$MODPATH/action.sh" ] || rm -rf "/data/adb/modules/TA_utl"
 
 # Hide module from APatch, KernelSU, KSUWebUIStandalone, MMRL
-nohup sh -c "while kill -0 $PPID 2>/dev/null; do sleep 1; done; rm -f '$MODPATH/module.prop'" >/dev/null 2>&1 &
+# Skip hiding when running standalone with TEESimulator (no Tricky Store):
+# the user needs the module entry visible to launch the WebUI from KSU/APatch manager.
+if [ -d "$TS" ] && [ ! -d "$TEE" ] && [ ! -d "$TEE_ALT" ]; then
+    nohup sh -c "while kill -0 $PPID 2>/dev/null; do sleep 1; done; rm -f '$MODPATH/module.prop'" >/dev/null 2>&1 &
+fi

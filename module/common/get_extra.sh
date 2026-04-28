@@ -163,7 +163,16 @@ set_security_patch() {
     security_patch_after_1y=$(echo "$formatted_security_patch + 10000" | bc)
     TODAY=$(date +%Y%m%d)
     if [ -n "$formatted_security_patch" ] && [ "$TODAY" -lt "$security_patch_after_1y" ]; then
-        TS_version=$(grep "versionCode=" "/data/adb/modules/tricky_store/module.prop" | cut -d'=' -f2)
+        TS_version=$(grep "versionCode=" "/data/adb/modules/tricky_store/module.prop" 2>/dev/null | cut -d'=' -f2)
+        # TEESimulator-compat fork: if Tricky Store is absent, write to TEESimulator's
+        # security_patch.txt and skip the rest of this branch.
+        if [ ! -f "/data/adb/modules/tricky_store/module.prop" ]; then
+            SECURITY_PATCH_FILE="/data/adb/tricky_store/security_patch.txt"
+            mkdir -p /data/adb/tricky_store
+            printf "system=%s\nvendor=%s\nboot=%s\n" "$security_patch" "$security_patch" "$security_patch" > "$SECURITY_PATCH_FILE"
+            chmod 644 "$SECURITY_PATCH_FILE"
+            return 0 2>/dev/null || exit 0
+        fi
         # James Clef's TrickyStore fork (GitHub@qwq233/TrickyStore)
         if grep -q "James" "/data/adb/modules/tricky_store/module.prop" && ! grep -q "beakthoven" "/data/adb/modules/tricky_store/module.prop"; then
             SECURITY_PATCH_FILE="/data/adb/tricky_store/devconfig.toml"
