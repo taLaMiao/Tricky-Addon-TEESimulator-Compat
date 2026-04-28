@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fork
     paths:
       - 'module/**'
       - 'webui/**'
@@ -75,7 +76,7 @@ jobs:
           path: ${{ env.ARTIFACT_NAME }}.zip
 
       - name: Create rolling "latest" pre-release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fork')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
