@@ -404,57 +404,73 @@ export function securityPatch() {
     // Get button
     getButton.addEventListener('click', async () => {
         showPrompt(getString('security_patch_fetching'));
-        // TEESimulator-compat fork: upstream replaced PATH with a list that
-        // included a literal ":$PATH" string (env objects are not shell-
-        // expanded), so /system/bin was effectively dropped and every
-        // grep/sed/cut/getprop/curl call in get_extra.sh failed silently.
-        // We now set an explicit PATH that prepends the optional rooted /
-        // termux locations and still resolves to the real Android system
-        // binaries.
-        const PATCH_PATH = [
-            "/data/adb/ap/bin",
-            "/data/adb/ksu/bin",
-            "/data/adb/magisk",
-            "/data/data/com.termux/files/usr/bin",
-            "/sbin",
-            "/system/bin",
-            "/system/xbin",
-            "/vendor/bin",
-        ].join(":");
-        const output = spawn('sh', [`${basePath}/common/get_extra.sh`, '--get-security-patch'],
-                        { cwd: "/data/local/tmp", env: { PATH: PATCH_PATH }});
-        let gotDate = false;
-        output.stdout.on('data', (data) => {
-            const raw = String(data).trim();
-            // Only treat the response as success if the script actually
-            // emitted a YYYY-MM-DD date. Filters out partial/empty chunks
-            // and the upstream stderr "Connection failed" leaking past.
-            const m = raw.match(/(\d{4}-\d{2}-\d{2})/);
-            if (!m) return;
-            gotDate = true;
-            const date = m[1];
-            showPrompt(getString('security_patch_fetched'), true, 1000);
-            checkAdvanced(true);
-            allPatchInput.value = date.replace(/-/g, '');
-            systemPatchInput.value = 'prop';
-            bootPatchInput.value = date;
-            vendorPatchInput.value = date;
-            devconfigPatchInput.value = date;
-        });
-        output.stderr.on('data', (data) => {
-            if (String(data).includes("failed")) {
-                // Don't surface the connection-failed toast yet -- the
-                // script may still recover from PIF on the next stdout
-                // chunk. We'll only complain on exit if no date arrived.
-                console.warn(String(data).trim());
-            } else {
-                console.error(data);
+
+        // TEESimulator-compat fork: upstream relied on `spawn()` to invoke
+        // `get_extra.sh --get-security-patch`, which:
+        //   1) requires the script's PATH to contain /system/bin (upstream
+        //      passed a literal ":$PATH" segment so it didn't), and
+        //   2) downloads source.android.com via curl/wget, which in many
+        //      WebUI exec contexts has no DNS or outbound network at all.
+        // Both failure modes produced an empty stdout and a red toast even
+        // on otherwise healthy installs.
+        //
+        // We now bypass the script entirely for this button and read the
+        // local PIF module's data directly. PlayIntegrityFork (osm0sis) and
+        // PlayIntegrityFix (chiteroman) both expose SECURITY_PATCH inside
+        // one of these files, refreshed daily by the upstream module's own
+        // auto-pif worker. That value tracks the latest stable Pixel patch
+        // close enough to use as the Get button's answer with zero network
+        // dependency.
+        //
+        // `exec()` is the kernelsu-alt API we already use elsewhere for
+        // root-only operations, so this also avoids spawn()'s occasional
+        // privilege/namespace surprises on KSU-Next 3.0.
+
+        const pifCandidates = [
+            "/data/adb/pif.json",
+            "/data/adb/modules/playintegrityfix/pif.json",
+            "/data/adb/modules/playintegrityfix/custom.pif.json",
+            "/data/adb/pif.prop",
+            "/data/adb/modules/playintegrityfix/pif.prop",
+            "/data/adb/modules/playintegrityfix/custom.pif.prop",
+        ];
+
+        const extractDate = (text) => {
+            if (!text) return null;
+            // Prop format:  SECURITY_PATCH=YYYY-MM-DD
+            // JSON format:  "SECURITY_PATCH": "YYYY-MM-DD"
+            const propMatch = text.match(/(?:^|\n)\s*SECURITY_PATCH\s*=\s*(\d{4}-\d{2}-\d{2})/);
+            if (propMatch) return propMatch[1];
+            const jsonMatch = text.match(/"SECURITY_PATCH"\s*:\s*"(\d{4}-\d{2}-\d{2})"/);
+            if (jsonMatch) return jsonMatch[1];
+            return null;
+        };
+
+        let date = null;
+        for (const path of pifCandidates) {
+            try {
+                const { errno, stdout } = await exec(
+                    `[ -f "${path}" ] && cat "${path}" || true`
+                );
+                if (errno !== 0 || !stdout) continue;
+                const found = extractDate(stdout);
+                if (found) { date = found; break; }
+            } catch (_) {
+                // try next candidate
             }
-        });
-        output.on('exit', (code) => {
-            if (!gotDate) {
-                showPrompt(getString('security_patch_get_failed'), false);
-            }
-        });
+        }
+
+        if (!date) {
+            showPrompt(getString('security_patch_get_failed'), false);
+            return;
+        }
+
+        showPrompt(getString('security_patch_fetched'), true, 1000);
+        checkAdvanced(true);
+        allPatchInput.value = date.replace(/-/g, '');
+        systemPatchInput.value = 'prop';
+        bootPatchInput.value = date;
+        vendorPatchInput.value = date;
+        devconfigPatchInput.value = date;
     });
 }
