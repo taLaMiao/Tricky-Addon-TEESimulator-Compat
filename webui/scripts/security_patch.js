@@ -404,27 +404,57 @@ export function securityPatch() {
     // Get button
     getButton.addEventListener('click', async () => {
         showPrompt(getString('security_patch_fetching'));
+        // TEESimulator-compat fork: upstream replaced PATH with a list that
+        // included a literal ":$PATH" string (env objects are not shell-
+        // expanded), so /system/bin was effectively dropped and every
+        // grep/sed/cut/getprop/curl call in get_extra.sh failed silently.
+        // We now set an explicit PATH that prepends the optional rooted /
+        // termux locations and still resolves to the real Android system
+        // binaries.
+        const PATCH_PATH = [
+            "/data/adb/ap/bin",
+            "/data/adb/ksu/bin",
+            "/data/adb/magisk",
+            "/data/data/com.termux/files/usr/bin",
+            "/sbin",
+            "/system/bin",
+            "/system/xbin",
+            "/vendor/bin",
+        ].join(":");
         const output = spawn('sh', [`${basePath}/common/get_extra.sh`, '--get-security-patch'],
-                        { cwd: "/data/local/tmp", env: { PATH: "/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:/data/data/com.termux/files/usr/bin:$PATH" }});
+                        { cwd: "/data/local/tmp", env: { PATH: PATCH_PATH }});
+        let gotDate = false;
         output.stdout.on('data', (data) => {
+            const raw = String(data).trim();
+            // Only treat the response as success if the script actually
+            // emitted a YYYY-MM-DD date. Filters out partial/empty chunks
+            // and the upstream stderr "Connection failed" leaking past.
+            const m = raw.match(/(\d{4}-\d{2}-\d{2})/);
+            if (!m) return;
+            gotDate = true;
+            const date = m[1];
             showPrompt(getString('security_patch_fetched'), true, 1000);
             checkAdvanced(true);
-
-            allPatchInput.value = data.replace(/-/g, '');
+            allPatchInput.value = date.replace(/-/g, '');
             systemPatchInput.value = 'prop';
-            bootPatchInput.value = data;
-            vendorPatchInput.value = data;
-            devconfigPatchInput.value = data;
+            bootPatchInput.value = date;
+            vendorPatchInput.value = date;
+            devconfigPatchInput.value = date;
         });
         output.stderr.on('data', (data) => {
-            if (data.includes("failed")) {
-                showPrompt(getString('security_patch_unable_to_connect'), false);
+            if (String(data).includes("failed")) {
+                // Don't surface the connection-failed toast yet -- the
+                // script may still recover from PIF on the next stdout
+                // chunk. We'll only complain on exit if no date arrived.
+                console.warn(String(data).trim());
             } else {
                 console.error(data);
             }
         });
         output.on('exit', (code) => {
-            if (code !== 0) showPrompt(getString('security_patch_get_failed'), false);
+            if (!gotDate) {
+                showPrompt(getString('security_patch_get_failed'), false);
+            }
         });
     });
 }
