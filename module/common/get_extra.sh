@@ -223,14 +223,48 @@ set_security_patch() {
 }
 
 get_latest_security_patch() {
-    security_patch=$(download "https://source.android.com/docs/security/bulletin/pixel" |
+    # 1) Try Google's Pixel security bulletin page (upstream behaviour).
+    security_patch=$(download "https://source.android.com/docs/security/bulletin/pixel" 2>/dev/null |
                      sed -n 's/.*<td>\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)<\/td>.*/\1/p' |
                      head -n 1)
 
-    if [ -n "$security_patch" ]; then
+    # 2) TEESimulator-compat fork: if the download failed (WebUI exec contexts
+    # frequently have no DNS / network) or HTML format changed, fall back to
+    # whatever the local PIF module currently advertises. PIF forks like
+    # PlayIntegrityFork/osm0sis refresh fingerprints daily via autopif4.sh so
+    # this is effectively "latest stable Pixel patch" without the network.
+    if [ -z "$security_patch" ]; then
+        for f in \
+            /data/adb/pif.json \
+            /data/adb/modules/playintegrityfix/pif.json \
+            /data/adb/modules/playintegrityfix/custom.pif.json \
+        ; do
+            [ -f "$f" ] || continue
+            security_patch=$(grep '"SECURITY_PATCH"' "$f" 2>/dev/null | sed 's/.*: *"//; s/".*//' | head -n1)
+            [ -n "$security_patch" ] && break
+        done
+    fi
+    if [ -z "$security_patch" ]; then
+        for f in \
+            /data/adb/pif.prop \
+            /data/adb/modules/playintegrityfix/pif.prop \
+            /data/adb/modules/playintegrityfix/custom.pif.prop \
+        ; do
+            [ -f "$f" ] || continue
+            security_patch=$(grep -E '^[[:space:]]*SECURITY_PATCH[[:space:]]*=' "$f" 2>/dev/null | \
+                             tail -n1 | cut -d'=' -f2- | tr -d ' \r\n')
+            [ -n "$security_patch" ] && break
+        done
+    fi
+
+    # Sanity-check the harvested string is shaped like YYYY-MM-DD before
+    # accepting it. Avoids feeding garbage into the WebUI's input fields.
+    if echo "$security_patch" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
         echo "$security_patch"
         exit 0
-    elif ! ping -c 1 -W 5 "source.android.com" >/dev/null 2>&1; then
+    fi
+
+    if ! ping -c 1 -W 5 "source.android.com" >/dev/null 2>&1; then
         echo "Connection failed" >&2
     fi
     exit 1
