@@ -27,18 +27,40 @@ download() {
 }
 
 get_xposed() {
+    # TEESimulator-compat fork: always rescan to avoid stale/corrupt cache.
+    # Upstream cached results in $XPOSED/$SKIPLIST persistently, which caused
+    # "Deselect Unnecessary" to deselect every app whenever the cache file
+    # accidentally contained all packages from a prior partial scan.
     mkdir -p "$MODPATH/tmp"
+    rm -f "$XPOSED" "$SKIPLIST"
     touch "$XPOSED" "$SKIPLIST"
-    pm list packages -3 | cut -d':' -f2 | grep -vxF -f "$SKIPLIST" | grep -vxF -f "$XPOSED" | busybox xargs -P $(busybox nproc) -n 1 sh -c '
+    pm list packages -3 | cut -d':' -f2 | busybox xargs -P $(busybox nproc) -n 1 sh -c '
         XPOSED=$1; SKIPLIST=$2; PACKAGE=$3
         APK_PATH=$(pm path "$PACKAGE" 2>/dev/null | head -n1 | cut -d: -f2)
         [ -z "$APK_PATH" ] && exit
-        if unzip -l "$APK_PATH" | grep -qE "xposed_init|xposed/module.prop"; then
+        # Stricter end-of-line anchor on actual filesystem paths inside the APK,
+        # not free-text matches anywhere in the unzip listing. Prevents banking
+        # apps that obfuscate string blobs containing "xposed_init" from being
+        # misclassified as Xposed modules.
+        if unzip -l "$APK_PATH" 2>/dev/null | grep -qE "[ /]xposed_init$|[ /]xposed/module\.prop$"; then
             echo "$PACKAGE" >> "$XPOSED"
         else
             echo "$PACKAGE" >> "$SKIPLIST"
         fi
     ' sh "$XPOSED" "$SKIPLIST"
+    # Sanity check: if the xposed file ended up containing an unreasonable
+    # fraction of installed packages (>= 60%), assume the scan was corrupted
+    # (e.g., grep matched against the package list itself due to a busybox
+    # quoting issue) and emit nothing instead of unchecking every app.
+    TOTAL=$(pm list packages -3 | wc -l)
+    FOUND=$(wc -l < "$XPOSED" 2>/dev/null || echo 0)
+    if [ "$TOTAL" -gt 0 ] && [ "$FOUND" -gt 0 ]; then
+        # FOUND * 100 / TOTAL >= 60  ->  abort
+        if [ "$((FOUND * 100 / TOTAL))" -ge 60 ]; then
+            : > "$XPOSED"
+            return 0
+        fi
+    fi
     cat "$XPOSED"
 }
 

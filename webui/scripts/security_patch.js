@@ -247,22 +247,44 @@ export function securityPatch() {
 
     // Auto config button
     autoButton.addEventListener('click', () => {
+        // TEESimulator-compat fork: track whether the script ever emitted
+        // a literal "not set" line. Upstream reacted to any partial stdout
+        // chunk containing the substring, which produced a false-fail toast
+        // even when the script later wrote security_patch.txt successfully
+        // (race between stdout buffering and exit). We now rely solely on
+        // exit code + post-run file verification.
+        let sawNotSet = false;
         const output = spawn('sh', [`${basePath}/common/get_extra.sh`, '--security-patch']);
         output.stdout.on('data', (data) => {
-            if (data.includes("not set")) {
-                showPrompt(getString('security_patch_auto_failed'), false);
+            // Match the exact "not set" line emitted by get_extra.sh's else
+            // branch, not any substring of obfuscated/i18n output.
+            if (/(^|\n)not set\s*(\n|$)/.test(String(data))) {
+                sawNotSet = true;
             }
         });
-        output.on('exit', (code) => {
-            if (code === 0) {
-                exec(`touch /data/adb/tricky_store/security_patch_auto_config`)
-                // Reset inputs
+        output.on('exit', async (code) => {
+            const reset = () => {
                 allPatchInput.value = '';
                 systemPatchInput.value = '';
                 bootPatchInput.value = '';
                 vendorPatchInput.value = '';
-
                 checkAdvanced(false);
+            };
+
+            // Post-run verification: if the script wrote a non-empty
+            // security_patch.txt or the spoof prop is now set, treat it as
+            // success regardless of upstream exit-code quirks.
+            let fileOk = false;
+            try {
+                const { errno: e1, stdout: s1 } = await exec(
+                    'sh -c "[ -s /data/adb/tricky_store/security_patch.txt ] && cat /data/adb/tricky_store/security_patch.txt || true"'
+                );
+                if (e1 === 0 && s1 && s1.trim().length > 0) fileOk = true;
+            } catch (_) { /* ignore */ }
+
+            if ((code === 0 && !sawNotSet) || fileOk) {
+                exec(`touch /data/adb/tricky_store/security_patch_auto_config`);
+                reset();
                 showPrompt(getString('security_patch_auto_success'));
             } else {
                 showPrompt(getString('security_patch_auto_failed'), false);

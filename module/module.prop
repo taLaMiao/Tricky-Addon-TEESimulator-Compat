@@ -1,6 +1,6 @@
 id=TA_utl_tee
 name=Tricky Addon (TEESimulator-compat fork)
-version=v5.0-beta.1-teefork
-versionCode=682
+version=v5.0-beta.2-teefork
+versionCode=683
 author=KOWX712 (fork w/ TEESimulator support)
 description=WebUI to configure /data/adb/tricky_store/ for Tricky Store OR TEESimulator. Standalone-friendly fork - does not auto-uninstall when only TEESimulator is present.
